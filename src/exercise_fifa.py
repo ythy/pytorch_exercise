@@ -3,50 +3,51 @@ import torch.nn as nn
 import torch.optim as optim
 from common.fifa_helper import (
     get_train_data,
+    train_test_split,
+    features_num,
+    features_cat,
     get_data_custom,
     format_value,
     FIFA_MLP,
-    HybridPlayerModel,
-    num_idx,
-    cat_idx,
+    HybridPlayerModel
     )
 import numpy as np
 
 # ========= 1. 加载真实数据 =========
-x_train_origin, x_test_origin, y_train_origin, y_test_origin= get_train_data(1500)
+all_data = get_train_data(1500)
+train_data, test_data = train_test_split(all_data)
 # ========= 2. 特征标准化 & 转成torch =========
 # 注意数值特征需要标准化，类别特征不需要标准化
 # ---- x ----
-mean = x_train_origin[:, num_idx].mean(axis=0) # 计算每一个特征的均值 mean = [age_mean, rating_mean, wage_mean, ...]
-std = x_train_origin[:, num_idx].std(axis=0)  # 计算每一个特征的标准差 std = x_train.std(axis=0)
+x_train_num = train_data[features_num].fillna(0).values
+x_test_num = test_data[features_num].fillna(0).values
+y_train_num = train_data["value_num"].fillna(0).values
+y_test_num = test_data["value_num"].fillna(0).values
+
+mean = x_train_num.mean(axis=0) # 计算每一个特征的均值 mean = [age_mean, rating_mean, wage_mean, ...]
+std = x_train_num.std(axis=0)  # 计算每一个特征的标准差 std = x_train.std(axis=0)
 std[std == 0] = 1.0   # 防止除零
 
-# ---- 数值部分（标准化后）----
-x_train_num = torch.tensor(
-   (x_train_origin[:, num_idx] - mean) / std, dtype=torch.float32
-)
-x_test_num = torch.tensor(
-   (x_test_origin[:, num_idx] - mean) / std, dtype=torch.float32
-)
-
+# ---- 数值部分（标准化）----
+x_train_num = torch.tensor((x_train_num - mean) / std, dtype=torch.float32)
+x_test_num = torch.tensor((x_test_num - mean) / std, dtype=torch.float32)
 # ---- 类别部分（token id）----
 x_train_cat = {
-    "Nationality": torch.tensor(x_train_origin[:, cat_idx["Nationality"]], dtype=torch.long),
-    "Position": torch.tensor(x_train_origin[:, cat_idx["Position"]], dtype=torch.long)
+    col: torch.tensor(train_data[f"{col}_enc"].values, dtype=torch.long)
+    for col in features_cat
 }
-
 x_test_cat = {
-    "Nationality": torch.tensor(x_test_origin[:, cat_idx["Nationality"]], dtype=torch.long),
-    "Position": torch.tensor(x_test_origin[:, cat_idx["Position"]], dtype=torch.long)
+    col: torch.tensor(test_data[f"{col}_enc"].values, dtype=torch.long)
+    for col in features_cat
 }
 # ---- y ----
-y_mean = y_train_origin.mean()
-y_std = y_train_origin.std()
+y_mean = y_train_num.mean()
+y_std = y_train_num.std()
 if y_std == 0:
     y_std = 1.0
 
-y_train = torch.tensor((y_train_origin - y_mean) / y_std, dtype=torch.float32).unsqueeze(1)
-y_test = torch.tensor((y_test_origin  - y_mean) / y_std, dtype=torch.float32).unsqueeze(1)
+y_train_num = torch.tensor((y_train_num - y_mean) / y_std, dtype=torch.float32).unsqueeze(1)
+y_test_num = torch.tensor((y_test_num  - y_mean) / y_std, dtype=torch.float32).unsqueeze(1)
  
 # ========= 3. 定义模型 =========
 # model = nn.Sequential(
@@ -63,8 +64,8 @@ y_test = torch.tensor((y_test_origin  - y_mean) / y_std, dtype=torch.float32).un
 #     nn.ReLU(),
 #     nn.Linear(64, 1) # h3 = [3.47]  # 标量（在标准化空间）
 # )
-
 # model = FIFA_MLP(input_dim=len(features))
+
 model = HybridPlayerModel(
     num_feat_dim=5,
 )
@@ -76,7 +77,7 @@ optimizer = optim.Adam(model.parameters(), lr=0.001) # lr: learning rate
 model.train()
 for epoch in range(500):
     y_pred = model(x_train_cat, x_train_num)
-    loss = criterion(y_pred, y_train)
+    loss = criterion(y_pred, y_train_num)
 
     optimizer.zero_grad()
     loss.backward()
@@ -91,11 +92,11 @@ for epoch in range(500):
 model.eval() # 不做梯度计算​ 保证推理结果稳定
 with torch.no_grad(): # 测试时反标准化 
     y_test_pred_scaled = model(x_test_cat, x_test_num)
-    test_loss = criterion(y_test_pred_scaled, y_test)
+    test_loss = criterion(y_test_pred_scaled, y_test_num)
 
     # 反标准化
     y_test_pred = y_test_pred_scaled * y_std + y_mean
-    y_test_real = y_test * y_std + y_mean
+    y_test_real = y_test_num * y_std + y_mean
     
 
 torch.set_printoptions(sci_mode=False)
@@ -109,6 +110,11 @@ print("Actual:   ", y_test_real[:5])
 # 5. 自定义数据推理
 # =========================================================
 x_inference_origin = np.array(get_data_custom())
+num_idx = np.array([0, 1, 2, 3, 4])
+cat_idx = {
+    "Nationality": 5,
+    "Position": 6
+}
 print("Raw inference data:\n", x_inference_origin)
 # 特征对齐
 # ---- 数值部分 ----
@@ -118,8 +124,8 @@ num_x_inf = torch.tensor(num_x_inf, dtype=torch.float32)
 
 # ---- 类别部分（token id）----
 cat_x_inf = {
-    "Nationality": torch.tensor(x_inference_origin[:, cat_idx["Nationality"]], dtype=torch.long),
-    "Position": torch.tensor(x_inference_origin[:, cat_idx["Position"]], dtype=torch.long)
+    col: torch.tensor(x_inference_origin[:, cat_idx[col]], dtype=torch.long)
+    for col in features_cat
 }
 
 # 推理
@@ -134,7 +140,5 @@ with torch.no_grad():
 
 for i in range(len(x_inference_origin)):
     print(
-        # f"{df.loc[i,'Nationality']} "
-        # f"{df.loc[i,'Position']} | "
         f"Predicted Value: {format_value(y_inference[i].item())}"
     )

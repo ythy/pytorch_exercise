@@ -1,76 +1,92 @@
 import numpy as np
 import pandas as pd
 import torch.nn as nn
-import torch.nn.functional as F
 import torch
  
-features = [
+features_num = [
     "Overall", "Potential", "Age", "height_cm", "weight_kg",
-    "Nationality_enc", "Position_enc"
 ]
-cat_origin_features = ["Nationality", "Position"]
+features_cat = ["Nationality", "Position"]
 
-num_idx = [0,1,2,3,4]
-cat_idx = {
-   "Nationality": 5,
-   "Position": 6 
-}
-
-global_cat2idx = {}
+cat_vocab_idx = {}
 cat_vocab_sizes = {}
 
 def get_data_custom():
     return [
     [
         78., 85., 21., 170.18, 72.12,
-        global_cat2idx["Nationality"]["Argentina"],
-        global_cat2idx["Position"]["RF"],
+        cat_vocab_idx["Nationality"]["Argentina"],
+        cat_vocab_idx["Position"]["RF"],
     ],
     [
         85., 89., 28., 185.42, 75.29,
-        global_cat2idx["Nationality"]["Brazil"],
-        global_cat2idx["Position"]["RCB"],
+        cat_vocab_idx["Nationality"]["Brazil"],
+        cat_vocab_idx["Position"]["RCB"],
     ],
     [
         92., 93., 31., 200.66, 83.01,
-        global_cat2idx["Nationality"]["China PR"],
-        global_cat2idx["Position"]["GK"],
+        cat_vocab_idx["Nationality"]["China PR"],
+        cat_vocab_idx["Position"]["GK"],
     ],
     [
         92., 93., 31., 200.66, 83.01,
-        global_cat2idx["Nationality"]["Argentina"],
-        global_cat2idx["Position"]["ST"],
+        cat_vocab_idx["Nationality"]["Argentina"],
+        cat_vocab_idx["Position"]["ST"],
     ]
 ]
  
+def build_category_mappings(
+    df: pd.DataFrame,
+) -> tuple[dict, dict]:
+    """
+    Build category-to-index mappings and vocabulary sizes.
 
-def get_train_data(count = 1000, test_count = 20)-> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    global global_cat2idx
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe containing categorical columns.
+
+    Returns
+    -------
+    global_cat2idx : dict
+        Mapping from category values to integer indices.
+    cat_vocab_sizes : dict
+        Vocabulary size for each categorical feature.
+    """
+    cat_vocab_idx: dict = {}
+    cat_vocab_sizes: dict = {}
+
+    for col in features_cat:
+        unique_vals = df[col].unique()
+        cat_vocab_idx[col] = {
+            val: idx for idx, val in enumerate(unique_vals)
+        }
+        cat_vocab_sizes[col] = len(unique_vals)
+
+    return cat_vocab_idx, cat_vocab_sizes
+
+def get_train_data(
+    count: int = 1000,
+) -> pd.DataFrame: # tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     df_origin = pd.read_csv("./data/FIFA19.csv", index_col=0)
     df_slice = df_origin.iloc[:count] 
-    for col in cat_origin_features:
-        unique_vals = df_slice[col].unique()
-        global_cat2idx[col] = {
-            v: i for i, v in enumerate(unique_vals)
-        }
-        # 记录 vocab size
-        cat_vocab_sizes[col] = len(unique_vals)
-    df = value_transform(df_slice)
-    x = df[features].fillna(0).values
-    y = df["value_num"].fillna(0).values
-    return train_test_split(x, y, test_count)
+    global cat_vocab_idx, cat_vocab_sizes
+    cat_vocab_idx, cat_vocab_sizes = build_category_mappings(df_slice)
+    return value_transform(df_slice)
+ 
 
-def train_test_split(x: np.ndarray, y: np.ndarray, 
-                     test_size: int = 20, seed: int = 42
-                     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def train_test_split(dp:pd.DataFrame, test_size: int = 20, seed: int = 42
+) -> tuple[np.ndarray, np.ndarray]:
     rng = np.random.default_rng(seed)
-    n_samples = x.shape[0] #x是 (n_samples, n_features)的NumPy数组
+    n_samples = dp.shape[0] #x是 (n_samples, n_features)的NumPy数组
     indices =  rng.permutation(n_samples) #打乱顺序
     test_idx = indices[:test_size] #取前test_size个
-    return x, x[test_idx], y, y[test_idx]
+    train_idx = indices[test_size:]
+    return dp.iloc[train_idx], dp.iloc[test_idx]
+
 
 def value_transform(data_frame:pd.DataFrame):
-    global global_cat2idx
+    global cat_vocab_idx
     df = data_frame.copy()
     df["value_num"] = df["Value"].apply(parse_value)
     df["value_log"] = np.log1p(df["value_num"])
@@ -82,9 +98,9 @@ def value_transform(data_frame:pd.DataFrame):
         * 0.453592
     )
 
-    for col in cat_origin_features:
-        mapping = global_cat2idx[col]
-        df[col + "_enc"] = df[col].map(mapping)
+    for col in features_cat:
+        mapping = cat_vocab_idx[col]
+        df[f"{col}_enc"] = df[col].map(mapping)
 
     return df
 
@@ -214,7 +230,7 @@ class HybridPlayerModel(nn.Module):
         #     ]
         # ]
         self.positional_encoding = nn.Parameter(
-            torch.zeros(1, len(cat_origin_features), d_model)
+            torch.zeros(1, len(features_cat), d_model)
         )
 
         
@@ -287,20 +303,21 @@ class HybridPlayerModel(nn.Module):
         # 拼接后形状: torch.Size([4, 2, 3])
         # 拼接后值:
         # tensor([[[ 0.5400, -0.1200,  0.8800],  # 样本1: 国籍
-        #         [ 0.2300,  0.6800, -0.4600]], # 样本1: 位置
+        #         [ 0.2300,  0.6800, -0.4600]],  # 样本1: 位置
 
         #         [[ 0.0900,  0.3500,  0.0300],  # 样本2: 国籍
-        #         [-0.1800,  0.2200,  0.0300]], # 样本2: 位置
+        #         [-0.1800,  0.2200,  0.0300]],  # 样本2: 位置
 
         #         [[ 0.1300,  0.4600,  0.1700],  # 样本3: 国籍
-        #         [ 0.0900,  0.3500,  0.0300]], # 样本3: 位置
+        #         [ 0.0900,  0.3500,  0.0300]],  # 样本3: 位置
 
         #         [[-0.1800,  0.2200,  0.0300],  # 样本4: 国籍
         #         [ 0.5400, -0.1200,  0.8800]]]) # 样本4: 位置    
         cat_emb = torch.cat(emb_list, dim=1)  # (B, cat_seq_len, d_model)
         
         # 3. 加位置编码
-        # 
+        # cat_emb.shape[1] = 2
+        #
         cat_emb = cat_emb + self.positional_encoding[:, :cat_emb.shape[1], :]
         
         # 4. Transformer
