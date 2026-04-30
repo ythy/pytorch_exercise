@@ -57,4 +57,15 @@ W.T.shape == (64, 1) #随机的1列64项特征权重组合
 ```
  
 
-
+## 一些概念
+### nn.Sequential
+线性堆叠模型容器​，用于实现MLP, MLP 可以用 Sequential 写，也可以用 Module 写
+```
+input → layer1 → layer2 → ... → output
+```
+### MLP
+MLP = Multilayer Perceptron Regression(回归), 模型类型
+> 由多个全连接层（Linear）+ 非线性激活组成的神经网络
+```
+x → Linear → ReLU → Linear → ReLU → ... → 输出
+```
