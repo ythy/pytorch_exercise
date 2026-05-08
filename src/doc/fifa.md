@@ -69,3 +69,167 @@ MLP = Multilayer Perceptron Regression(回归), 模型类型
 ```
 x → Linear → ReLU → Linear → ReLU → ... → 输出
 ```
+
+## Transformer 的 Self-Attention
+> Query 是“我想查什么”，Key 是“我有什么”，Value 是“我提供什么信息”
+
+1️⃣ Query（查询）：「我在关注什么」
+每一个 token 会生成一个 Query 向量
+表示：“当前这个 token，想要去和其他 token 建立联系时的‘提问方式’”
+2️⃣ Key（键）：「我可以被怎样匹配」
+每一个 token 也会生成一个 Key 向量
+表示：“我这里有什么特征，可以用来被别的 token 匹配”
+3️⃣ Value（值）：「我真正携带的信息」
+每一个 token 生成一个 Value 向量
+表示：“如果我被关注到，我贡献什么内容”
+
+### 案例
+####  输入 X（3 个 token，维度 = 4）
+```python
+X =
+[
+  [1, 0, 0, 0],   // token1
+  [0, 1, 0, 0],   // token2
+  [0, 0, 1, 0]    // token3
+]
+```
+#### 参数矩阵（可学习）
+```python
+W_Q =
+[
+  [1, 0],
+  [0, 1],
+  [1, 0],
+  [0, 1]
+]
+W_K =
+[
+  [1, 0],
+  [1, 0],
+  [0, 1],
+  [0, 1]
+]
+W_V =
+[
+  [1, 0, 0],
+  [0, 1, 0],
+  [0, 0, 1],
+  [1, 0, 0]
+]
+```
+#### 计算 Q / K / V
+`Query Q = X · W_Q;  Key K = X · W_K;  Value V = X · W_V`
+```python
+Q =
+[
+  [1, 0],   // q1
+  [0, 1],   // q2
+  [0, 1]    // q3
+]
+K =
+[
+  [1, 0],   // k1
+  [1, 0],   // k2
+  [0, 1]    // k3
+]
+Kᵀ =
+[
+  [1, 1, 0],   // Kᵀ1
+  [0, 0, 1],   // Kᵀ2
+]
+V =
+[
+  [1, 0, 0],   // v1
+  [0, 1, 0],   // v2
+  [1, 0, 0]    // v3
+]
+```
+#### Attention Score（Q · Kᵀ）
+Kᵀ 是 Key 矩阵的转置（transpose）
+```python
+Scores =
+[
+  [1, 1, 0],
+  [0, 0, 1],
+  [0, 0, 1]
+]
+```
+#### Softmax（按行，省略缩放）
+```python
+Weights =
+[
+  [0.42, 0.42, 0.16], // token1 的注意力分布
+  [0.23, 0.23, 0.54], // token2
+  [0.23, 0.23, 0.54]  // token3
+]
+```
+#### 输出 Z（加权 Value）
+Z = Weights · V
+```
+Z =
+[
+  [0.58, 0.42, 0],
+  [0.77, 0.23, 0],
+  [0.77, 0.23, 0]
+]
+```
+#### Loss = f(Z) 反向传播
+相当于loss.backward()
+“Loss 对 Z 的偏导”
+∂L：Loss 的无穷小变化
+∂Z：Z 的无穷小变化
+∂L/∂Z：敏感程度（有数值）
+```
+∂L/∂Z =
+[
+  [∂L/∂z11, ∂L/∂z12, ∂L/∂z13],
+  [∂L/∂z21, ∂L/∂z22, ∂L/∂z23],
+  [∂L/∂z31, ∂L/∂z32, ∂L/∂z33]
+]
+```
+1. 这里需要理解导数, h是x变化量
+f'(x) = lim_{h→0} [f(x+h) − f(x)] / h
+2. 举例一元二次方程求导
+f(x) = ax² + bx + c
+f(x+h) = a(x+h)² + b(x+h) + c
+f(x+h) − f(x) = 2axh + ah² + bh
+[f(x+h) − f(x)] / h = 2ax + ah + b
+取极限 h→0：f'(x) = 2ax + b
+#### 从 ∂L/∂Z 到 Attention Weight
+我们要计算：“W 中某一个格子 W[ia]，对 L 有多大影响？” 这就是 ∂L/∂W[ia]。
+W[ia] 会影响 Z 的第 i 行的所有列 j
+W[ia] → Z[i1], Z[i2], Z[i3], ..., Z[im]
+每个 Z[i][j] 又会影响 L， 影响大小是 ∂L/∂Z[i][j]
+W[ia] 对 L 的总影响，有 多条路径
+W[ia]
+ ├─→ Z[i1] → L
+ ├─→ Z[i2] → L
+ ├─→ Z[i3] → L
+ └─→ ...
+
+对于某一个 Z[i][j]：
+W[ia] 对 Z[i][j] 的影响：∂Z[i][j] / ∂W[ia]
+Z[i][j] 对 L 的影响： ∂L / ∂Z[i][j]
+两者相乘，就是这条路径的贡献。
+∂L/∂W[ia] = ∑_j ( ∂L/∂Z[i][j] ) × ( ∂Z[i][j]/∂W[ia] )
+
+Z[i][j] = ∑_a W[i][a] × V[a][j]
+W[i][a] 变化一点点，Z[i][j] 会变多少？ ∂Z[i][j] / ∂W[i][a] 
+Z[i][j] = 
+W[i][1]×V[1][j] +
+W[i][2]×V[2][j] +
+...
++ W[i][a]×V[a][j] +
+...
+
+∂Z[i][j]/∂W[ia] = V[a][j]
+∂L/∂W[ia] = ∑_j ∂L/∂Z[i][j] × V[a][j]
+
+#### 更新Weight
+∂L/∂W = ∂L/∂Z @ Vᵀ
+W.grad = ∂L/∂W
+optimizer.step()
+
+∂L/∂Scores = Weights ⊙ (∂L/∂Weights − mean(...))
+∂L/∂Q, ∂L/∂K
+→ ∂L/∂W_Q, ∂L/∂W_K

@@ -67,7 +67,7 @@ y_test_num = torch.tensor((y_test_num  - y_mean) / y_std, dtype=torch.float32).u
 # model = FIFA_MLP(input_dim=len(features))
 
 model = HybridPlayerModel(
-    num_feat_dim=5,
+    num_feat_dim=len(features_num),
 )
 
 # ========= 4. 损失函数 & 优化器 =========
@@ -113,7 +113,8 @@ x_inference_origin = np.array(get_data_custom())
 num_idx = np.array([0, 1, 2, 3, 4])
 cat_idx = {
     "Nationality": 5,
-    "Position": 6
+    "Position": 6,
+    "Club": 7,
 }
 print("Raw inference data:\n", x_inference_origin)
 # 特征对齐

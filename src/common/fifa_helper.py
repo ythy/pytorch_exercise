@@ -6,7 +6,7 @@ import torch
 features_num = [
     "Overall", "Potential", "Age", "height_cm", "weight_kg",
 ]
-features_cat = ["Nationality", "Position"]
+features_cat = ["Nationality", "Position", "Club"]
 
 cat_vocab_idx = {}
 cat_vocab_sizes = {}
@@ -17,22 +17,38 @@ def get_data_custom():
         78., 85., 21., 170.18, 72.12,
         cat_vocab_idx["Nationality"]["Argentina"],
         cat_vocab_idx["Position"]["RF"],
+        cat_vocab_idx["Club"]["FC Barcelona"],
     ],
     [
         85., 89., 28., 185.42, 75.29,
         cat_vocab_idx["Nationality"]["Brazil"],
         cat_vocab_idx["Position"]["RCB"],
+        cat_vocab_idx["Club"]["Juventus"],
     ],
     [
         92., 93., 31., 200.66, 83.01,
         cat_vocab_idx["Nationality"]["China PR"],
         cat_vocab_idx["Position"]["GK"],
+        cat_vocab_idx["Club"]["FC Barcelona"],
+    ],
+     [
+        92., 93., 31., 200.66, 83.01,
+        cat_vocab_idx["Nationality"]["China PR"],
+        cat_vocab_idx["Position"]["GK"],
+        cat_vocab_idx["Club"]["Fulham"],
+    ],
+    [
+        92., 93., 31., 200.66, 83.01,
+        cat_vocab_idx["Nationality"]["Argentina"],
+        cat_vocab_idx["Position"]["GK"],
+        cat_vocab_idx["Club"]["Fulham"],
     ],
     [
         92., 93., 31., 200.66, 83.01,
         cat_vocab_idx["Nationality"]["Argentina"],
         cat_vocab_idx["Position"]["ST"],
-    ]
+        cat_vocab_idx["Club"]["FC Barcelona"],
+    ],
 ]
  
 def build_category_mappings(
@@ -182,36 +198,29 @@ class HybridPlayerModel(nn.Module):
     ):
         super().__init__()
         
-        # 示例 nn.Embedding(5, 3) 5个token，3个维度
-        # tensor([[ 0.1296,  0.4550,  0.1673],  # token 0
-        # [ 0.0925,  0.3475,  0.0279],  # token 1
-        # [-0.1826,  0.2176,  0.0312],  # token 2
-        # [ 0.5434, -0.1234,  0.8765],  # token 3
-        # [ 0.2345,  0.6789, -0.4567]]) # token 4
-        # ---- 模拟推理输入 ----
-        # cat_x = torch.tensor([
-        #     [3, 4],  # 阿根廷(3), GK(4)
-        #     [1, 2]   # 巴西(1), ST(2)
+        # 生成特征字典
+        # 示例 nn.Embedding(5, 32) 5个token 32个维度. 
+        # token是特征字典中的一个key值, 比如3代表阿根廷(3), 4代表 GK(4), 不同特征最好生成独立的字典.
+        # tensor([
+        # [ 0.1296, ....,  0.4572],  # token 0, ∈ ℝ³²
+        # [ 0.0925, ....,  0.0279],  # token 1, ∈ ℝ³²
+        # [-0.1826, ....,  0.0312],  # token 2, ∈ ℝ³²
+        # [ 0.5434, ....,  0.8765],  # token 3, ∈ ℝ³²
+        # [ 0.2345, ...., -0.4567],  # token 4, ∈ ℝ³²
         # ])
-        # shape: (2, 2)
-        # ---- 模拟推理输出 ----
-        # tensor([[[ 0.5434, -0.1234,  0.8765],  # token 3 (阿根廷)
-        #  [ 0.2345,  0.6789, -0.4567]],  # token 4 (GK)
-        #
-        # [[ 0.0925,  0.3475,  0.0279],  # token 1 (巴西)
-        #  [-0.1826,  0.2176,  0.0312]]]) # token 2 (ST)
-        # torch.Size([2, 2, 3])
         # ---- Transformer 分支 ----
         # embedding: 一个从离散集合到连续向量空间的映射，把一个单词 嵌入​ 到向量空间
         # 离散集合 {阿根廷, 巴西, 中国, …}
-        # 向量空间 R^32 → 举例 0.1296, 0.4550, 0.1673, 0.5434, ..., 0.2345]  # 32 个实数
-        # embedding 函数 f(阿根廷) = [0.54, -0.12, ..., 0.88]
+        # 向量空间 R^32 → 举例 0.1296, 0.4550, 0.1673, 0.5434, ..., 0.2345]  # 32 个实数  
+        # embedding 函数 f(阿根廷) = [0.54, -0.12, ..., 0.88] ∈ ℝ³²
         # 输入: 单词"Argentina" → token id 3
-        # 输出: 向量 [0.54, -0.12, ..., 0.88]
+        # 输出: 向量 [0.54, -0.12, ..., 0.88] ∈ ℝ³²
         # 每个特征有自己的 embedding
-
         self.embeddings = nn.ModuleDict({
-            name: nn.Embedding(vocab_size, d_model)
+            name: nn.Embedding(
+                vocab_size,  # 词表大小
+                d_model      # 每个 token 映射成 d_model 维向量 
+            )
             for name, vocab_size in cat_vocab_sizes.items()
         })
  
@@ -221,18 +230,17 @@ class HybridPlayerModel(nn.Module):
         #     1,               # 第 0 维
         #     max_len,         # 第 1 维
         #     d_model          # 第 2 维
-        # )  1, 2, 4
+        # )  1, 3, 32
         # [
         #     [
-        #         [0, 0, 0, 0],   # pos 0
-        #         [0, 0, 0, 0],   # pos 1
-
+        #         [0, ..., 0],   # pos 0 ∈ ℝ³²
+        #         [0, ..., 0],   # pos 1 ∈ ℝ³²
+        #         [0, ..., 0],   # pos 2 ∈ ℝ³²
         #     ]
         # ]
         self.positional_encoding = nn.Parameter(
             torch.zeros(1, len(features_cat), d_model)
         )
-
         
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model, # the number of expected features  向量维度 32 每个 token 的向量长度，阿根廷向量 = [x₁, x₂, ..., x₃₂]
@@ -263,91 +271,70 @@ class HybridPlayerModel(nn.Module):
         self.fc = nn.Linear(d_model * 2, 1)
 
     def forward(self, cat_x_dict, num_x):
-        """
-        Args:
-            cat_x_dict: {
-                "Nationality": (batch_size,)  # token ids
-                "Position": (batch_size,)     # token ids
-            }
-            num_x: (batch_size, num_feat_dim)
-        """
+
         # ---- Transformer 分支 (独立 embedding) ----
         emb_list = []
         # 1. 分别对每个类别特征做 embedding
         for feat_name, feat_tensor in cat_x_dict.items():
-            # unsqueeze(1) 前: [x₁, x₂, x₃, ..., x₁₅₀₀]        ← 1500 个数字
-            # unsqueeze(1) 后: [[x₁], [x₂], [x₃], ..., [x₁₅₀₀]]  ← 1500 个单元素列表
+            # unsqueeze(1) 前: feat_tensor: tensor([ 1,  3, 26,  ...,  3, 11, 21])      ← 样本数量
+            # unsqueeze(1) 后: feat_tensor: tensor([[ 1],[ 3],[26],...,[ 3],[11],[21]]) ← 样本数量个单元素列表
             if feat_tensor.dim() == 1:
                 feat_tensor = feat_tensor.unsqueeze(1)  # (B,1)
-            
-            # embedding 查询: (B,1) → (B,1,d_model)
-            # 以 d_model = 3，B = 4 举例
-            # 国籍 embedding 输出
+            # embedding 转换: (B,1) → (B,1,d_model)
+            # 以 d_model = 32，B = 1500  举例
+            # 国籍 embedding 输出 特征相同,对应相同一组向量,例如下面的巴西
             # emb_nation = torch.tensor([
-            #     [[0.54, -0.12, 0.88]],  # 样本1: 阿根廷
-            #     [[0.09, 0.35, 0.03]],   # 样本2: 巴西
-            #     [[0.13, 0.46, 0.17]],   # 样本3: 中国
-            #     [[-0.18, 0.22, 0.03]]   # 样本4: 西班牙
-            # ])  # 形状: (4, 1, 3)
+            #     [[0.54, ..., 0.88]],  # 样本1: 阿根廷  ∈ ℝ³²
+            #     [[0.09,..., 0.03]],   # 样本2: 巴西  ∈ ℝ³²
+            #     .....,
+            #     [[0.09,..., 0.03]],   # 样本1500 巴西 ∈ ℝ³²
+            # ])  # 形状: (1500, 1, 32)
             # 位置 embedding 输出
             # emb_pos = torch.tensor([
-            #     [[0.23, 0.68, -0.46]],  # 样本1: GK
-            #     [[-0.18, 0.22, 0.03]],  # 样本2: ST
-            #     [[0.09, 0.35, 0.03]],   # 样本3: CB
-            #     [[0.54, -0.12, 0.88]]   # 样本4: CM
-            # ])  # 形状: (4, 1, 3)
+            #     [[0.23, ..., -0.46]], # 样本1: GK ∈ ℝ³²
+            #     [[-0.18,..., 0.03]],  # 样本2: ST ∈ ℝ³²
+            #     .....,
+            #     [[0.23,..., 0.13]],   # 样本1500 ∈ ℝ³²
+            # ])  # 形状: (1500, 1, 32)
             emb = self.embeddings[feat_name](feat_tensor)
             emb_list.append(emb)
         
         # 2. 拼接成序列: (B,1,d_model)+(B,1,d_model) → (B,2,d_model)
-        # 拼接后形状: torch.Size([4, 2, 3])
+        # 拼接后形状: torch.Size([1500, 2, 32])
         # 拼接后值:
-        # tensor([[[ 0.5400, -0.1200,  0.8800],  # 样本1: 国籍
-        #         [ 0.2300,  0.6800, -0.4600]],  # 样本1: 位置
-
-        #         [[ 0.0900,  0.3500,  0.0300],  # 样本2: 国籍
-        #         [-0.1800,  0.2200,  0.0300]],  # 样本2: 位置
-
-        #         [[ 0.1300,  0.4600,  0.1700],  # 样本3: 国籍
-        #         [ 0.0900,  0.3500,  0.0300]],  # 样本3: 位置
-
-        #         [[-0.1800,  0.2200,  0.0300],  # 样本4: 国籍
-        #         [ 0.5400, -0.1200,  0.8800]]]) # 样本4: 位置    
+        # tensor([[[0.54, ..., 0.88],  # 样本1: 国籍 ∈ ℝ³²
+        #         [0.23, ..., -0.46]],  # 样本1: 位置 ∈ ℝ³²
+        #         [[0.09,..., 0.03],  # 样本2: 国籍 ∈ ℝ³²
+        #         [-0.18,..., 0.03]],  # 样本2: 位置 ∈ ℝ³²
+        #         .....,
+        #         [[0.09,..., 0.03],  # 样本1500: 国籍 ∈ ℝ³²
+        #         [0.23,..., 0.13]]]) # 样本1500: 位置 ∈ ℝ³²    
         cat_emb = torch.cat(emb_list, dim=1)  # (B, cat_seq_len, d_model)
         
         # 3. 加位置编码
-        # cat_emb.shape[1] = 2
-        #
+        # Transformer 本身是完全并行的，必须显式地告诉模型：每个 token 在序列中的位置 
+        # cat_emb.shape             (1500, 2, 32)
+        # positional_encoding.shape (1, 2, 32)
         cat_emb = cat_emb + self.positional_encoding[:, :cat_emb.shape[1], :]
-        
         # 4. Transformer
         cat_out = self.transformer(cat_emb)  # (B, cat_seq_len, d_model)
-        
         # 5. 池化 (沿序列维度平均)
         # .mean(dim=1)是把每个样本的多个特征向量“平均”成一个向量
-        # cat_out = torch.tensor([
-        #     # 样本1
-        #     [[0.6, 0.1, 1.2],   # 特征1: 国籍+位置0编码+transformer处理
-        #     [0.6, 1.2, 0.1]],   # 特征2: 位置+位置1编码+transformer处理
-            
-        #     # 样本2
-        #     [[0.2, 0.6, 0.3],
-        #     [0.2, 0.7, 0.6]],
-            
-        #     # 样本3
-        #     [[0.2, 0.7, 0.5],
-        #     [0.5, 0.9, 0.6]],
-            
-        #     # 样本4
-        #     [[-0.1, 0.4, 0.3],
-        #     [0.9, 0.4, 1.5]]
-        # ])
-        # 输出形状: torch.Size([4, 3])
+        # 相当于[(Nationality + Position) / 2]
+        # cat_out = tensor([
+        #           [[0.54, ..., 0.88],   # 样本1: 国籍+位置0编码+transformer处理 ∈ ℝ³²
+        #           [0.23, ..., -0.46]],  # 样本1: 位置+位置1编码+transformer处理 ∈ ℝ³²
+        #           [[0.09,..., 0.03],   # 样本2 ∈ ℝ³²
+        #           [-0.18,..., 0.03]],  # 样本2 ∈ ℝ³²
+        #           .....,
+        #           [[0.39,..., 0.13],  # 样本1500 ∈ ℝ³²
+        #           [0.23,..., 0.13]]]) # 样本1500 ∈ ℝ³²
+        # 输出形状: torch.Size([1500, 32])
         # 输出值:
-        # tensor([[0.6000, 0.6500, 0.6500],
-        #         [0.2000, 0.6500, 0.4500],
-        #         [0.3500, 0.8000, 0.5500],
-        #         [0.4000, 0.4000, 0.9000]])
+        # tensor([[0.6000, ..., 0.6500], ∈ ℝ³²
+        #         [0.2000, ..., 0.4500], ∈ ℝ³²
+        #         .....,
+        #         [0.4000, ..., 0.9000]]) ∈ ℝ³²
         cat_out = cat_out.mean(dim=1)  # (B, d_model)
         
         # ---- MLP 分支 (不变) ----
