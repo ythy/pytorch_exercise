@@ -152,9 +152,10 @@ Scores =
   [1, 1, 0],
   [0, 0, 1],
   [0, 0, 1]
-]
+]·
 ```
 #### Softmax（按行，省略缩放）
+Softmax 保证一行数据 非负，和为1，保持原先的大小关系
 ```python
 Weights =
 [
@@ -165,7 +166,7 @@ Weights =
 ```
 #### 输出 Z（加权 Value）
 Z = Weights · V
-```
+```python
 Z =
 [
   [0.58, 0.42, 0],
@@ -231,5 +232,174 @@ W.grad = ∂L/∂W
 optimizer.step()
 
 ∂L/∂Scores = Weights ⊙ (∂L/∂Weights − mean(...))
+∂L/∂Q, ∂L/∂K → ∂L/∂W_Q, ∂L/∂W_K
+
+∑_j ∂L/∂Z[i][j] · ∂Z[i][j]/∂W[ia]
+Z[i][j]需要清楚两维
+W[ia]只是一个“被求导的元素”，所以没有写成W[i][a]
+
+
+反向传播示例
+∂L/∂Z
+  ↓
+∂L/∂Weights
+  ↓ (softmax)
+∂L/∂Scores
+  ↓
 ∂L/∂Q, ∂L/∂K
-→ ∂L/∂W_Q, ∂L/∂W_K
+  ↓
+∂L/∂W_Q, ∂L/∂W_K, ∂L/∂W_V
+  ↓
+∂L/∂X
+
+
+## token 基础
+x = token_embedding + pos_embedding  # (B, T, D)
+Q = x @ W_Q                          # (B, T, D_q) 
+> “Q 是 token 的 query”
+Q 是 token 的 query 向量表示
+每个 token 对应一组 Q、K、V 向量
+### FFN
+FFN（Feed-Forward Network，前馈网络）是 Transformer 中每一个 Encoder / Decoder Layer 里的第二个核心组件（第一个是 Self-Attention）。
+一句话说就是：
+> FFN 是对每个 token 的特征向量做“独立非线性变换”的网络。
+Input
+ ↓
+Self-Attention (+ Add & Norm)
+ ↓
+FFN (+ Add & Norm)
+ ↓
+Output
+* Self-Attention：让 token 之间交换信息（谁和谁有关）。
+* FFN：让每个 token 独立地做非线性变换（把当前信息映射成更有用的表示）。
+ FFN典型做法是：先把维度放大（例如 512 维变成 2048 维），经过一个非线性激活（如 ReLU 或 GELU），再把维度缩小回原来的大小（2048 变回 512）。
+所以常说 FFN 是“升维 → 非线性 → 降维”的两层全连接结构。
+如果没有 FFN，模型容易变成本质上还是线性组合，难以学到更复杂的特征；
+加上 FFN 后，每层才能让 token 的表示变得更“丰富”。
+FFN 就是每个 token 独立过一个小 MLP，用来把当前信息映射成更有用的表示。
+```python
+def FFN(x):
+    # x: [T, D]
+    h = gelu(x @ W1 + b1)   # [T, D_ff]
+    y = h @ W2 + b2        # [T, D]
+    return y
+```
+```
+x      : [T, D]
+W1     : [D, D_ff]
+b1     : [D_ff]
+h      : [T, D_ff]
+W2     : [D_ff, D]
+b2     : [D]
+y      : [T, D]
+```
+### Self-Attention 实战案例
+1. 输入 “猫 喜欢 鱼”
+2. 经过 tokenizer 后得到 3 个 token：`token_id = [23, 56, 78]`
+3. embedding 4维
+```python
+x1 = [0.1, 0.2, 0.3, 0.4] # 猫
+x2 = [0.5, 0.6, 0.7, 0.8] # 喜欢
+x3 = [0.9, 1.0, 1.1, 1.2] # 鱼
+
+X = # [T, D]
+[
+  [0.1, 0.2, 0.3, 0.4],   # 猫
+  [0.5, 0.6, 0.7, 0.8],   # 喜欢
+  [0.9, 1.0, 1.1, 1.2]    # 鱼
+]
+```
+4. 计算 Q、K、V
+Q = X @ WQ # 这个 token 发出的查询
+K = X @ WK # 这个 token 被查询时的身份
+V = X @ WV
+n_heads = 2
+D_head = D / n_heads = 2
+W_V : [D, D_head]
+```python
+W_Q = # W_Q 是一个矩阵：[D, D_head]
+[
+  [1, 0],
+  [0, 1],
+  [1, 0],
+  [0, 1]
+]
+W_K = # W_K：[D, D_head]
+[
+  [1, 0],
+  [1, 0],
+  [0, 1],
+  [0, 1]
+]
+W_V =
+[
+  [1, 0],
+  [0, 1],
+  [0, 0],
+  [1, 0]
+]
+```
+得到
+```python
+Q = # [T, D_head]
+[
+  [0.1, 0.2],
+  [0.5, 0.6],
+  [0.9, 1.0]
+]
+K = # [T, D_head]
+[ 
+  [0.3, 0.4],
+  [0.1, 0.5],
+  [0.2, 0.3]
+]
+K^T = # [D_head, T]
+[ 
+  [0.3, 0.1, 0.2],
+  [0.4, 0.5, 0.3],
+]
+V = 同上
+```
+5. 计算注意力分数（Attention Scores）
+scores = Q @ K^T
+得到
+```python
+scores =
+[
+  [0.05, 0.17, 0.29],
+  [0.17, 0.61, 1.05],
+  [0.29, 1.05, 1.81]
+]
+```
+解释：
+scores[i][j] = 第 i 个 token 对第 j 个 token 的“关注程度”
+例如：
+scores[1][2] = 1.05
+表示 “喜欢” 对 “鱼” 关注度很高
+6. Softmax（归一化成概率）
+特点：
+每一行加起来 = 1
+越相关的位置越大
+```python
+attention_weights = # [T, T]
+[ 
+  [0.30, 0.33, 0.37],
+  [0.15, 0.35, 0.50],
+  [0.10, 0.30, 0.60]
+]
+```
+7. 加权求和 V（得到输出）
+output = attention_weights @ V
+```python
+output =
+[
+  [0.54, 0.64],   # 猫的新表示
+  [0.62, 0.72],   # 喜欢的新表示
+  [0.70, 0.80]    # 鱼的新表示
+]
+```
+
+
+
+
+
