@@ -1,3 +1,28 @@
+## 总结
+FIFA 案例是：
+输入：
+类别特征：cat_x_dict（国籍、位置…）
+数值特征：num_x
+Transformer 编码类别特征
+MLP 编码数值特征
+融合 → FC → 预测（如身价 / 评分）
+👉 这是一个监督学习（回归 / 分类）模型
+
+FIFA 训练时“存的是什么模型”？
+✅ 保存的内容
+`torch.save(model.state_dict(), "fifa_model.pt")`
+
+里面包含的是：
+✅ embedding 权重
+✅ Transformer 权重（W_Q / W_K / W_V / FFN）
+✅ MLP 权重
+✅ FC 权重
+📌 不包含：
+输入数据
+token
+KV Cache
+👉 和对话模型 完全一致
+
 ## 数据训练变化演示
 
 ### 测试数据和关键代码
