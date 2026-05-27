@@ -3,19 +3,6 @@ import pandas as pd
 import torch.nn as nn
 import torch
 
-def format_value(num):
-    if pd.isna(num):
-        return np.nan
-
-    num = float(num)
-
-    if num >= 1e6:
-        return f"€{num / 1e6:.2f}M"
-    elif num >= 1e3:
-        return f"€{num / 1e3:.1f}K"
-    else:
-        return f"{int(num)}"
-    
 
 class HybridPlayerModel(nn.Module):
     def __init__(
@@ -175,26 +162,3 @@ class HybridPlayerModel(nn.Module):
         fused = torch.cat([cat_out, num_out], dim=1)  # (B, 2*d_model)
         
         return self.fc(fused)  # (B, 1)
-
-def load_model(path):
-    ckpt = torch.load(path, weights_only=False)
-    model = HybridPlayerModel(
-        ckpt["vocab_sizes"],
-        num_feat_dim=ckpt["x_num"].shape[1]
-    )
-    model.load_state_dict(ckpt["model_state"])
-    model.eval()
-    return model, ckpt
-
-def save_model(path, model, data):
-    checkpoint = {
-        "model_state": model.state_dict(),
-        "vocab_sizes": data["cat_vocab_sizes"],
-        "vocab_idx": data["cat_vocab_idx"],
-        "x_num": data["x_num"],
-        "x_mean": data["x_mean"],
-        "x_std": data["x_std"],
-        "y_mean": data["y_mean"],
-        "y_std": data["y_std"],
-    }
-    torch.save(checkpoint, path)
