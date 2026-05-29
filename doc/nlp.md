@@ -1,3 +1,5 @@
+### NLP = Natural Language Processing（自然语言处理）
+
 ### 错误记录
 1. RuntimeError: stack expects each tensor to be equal size, but got [122] at entry 0 and [121] at entry 1
 原因： dataset中 mask 必须和 x / y 等长

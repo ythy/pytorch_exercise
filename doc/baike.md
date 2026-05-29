@@ -1,4 +1,44 @@
 # 随录
+## GPT2 模型结构
+```baSH
+GPT2LMHeadModel
+└── GPT2Model
+    ├── wte        # token embedding
+    ├── wpe        # position embedding
+    ├── h (layers)
+    │   ├── attn
+    │   │   ├── c_attn.weight  ✅ wQ + wK + wV 拼在一起
+    │   │   ├── c_proj.weight
+    │   ├── mlp
+    │   │   ├── c_fc.weight
+    │   │   ├── c_proj.weight
+    ├── ln_f
+└── lm_head.weight  # 输出投影 lm_head = Linear(hidden_size, vocab_size)
+
+```
+## MLP = 前馈神经网络（Feed‑Forward Network）
+```bash
+transformer.h[layer].mlp
+├── c_fc   (升维) # fully-connected layer
+├── act    (激活) # activation function
+└── c_proj (降维) # projection layer
+```
+
+## 当前百科数据适合什么
+✅ 适合训练：因果语言模型（CLM）→ QA‑finetune / Pretrain + SFT​
+✅ 推荐模型：GPT‑2（中文需 SentencePiece）/ Qwen‑0.5B / ChatGLM‑6B‑int4
+### 方案一（最推荐·你项目最匹配）：GPT‑2 + QA‑SFT
+```bash
+<s>问：小华要冻些冰块来调酒，为了赶时间，她应该？</s>答：就用冷开水</s>
+<s>问：小黄花鱼长大后就是大黄花鱼吗？</s>答：不是</s>
+<s>问：世界上最大的蝴蝶是哪一种？</s>答：南美凤蝶</s>
+<s>问：小鸡是由鸡蛋的？答：蛋黄发育来的</s>
+```
+### 方案二（工业级·省事）：Qwen‑0.5B / 1.5B + LoRA
+```bash
+{"instruction": "回答以下问题", "input": "小华要冻些冰块来调酒，为了赶时间，她应该？", "output": "就用冷开水"}
+```
+
 ## ReLU（Rectified Linear Unit）
 ```py
 def relu(x):

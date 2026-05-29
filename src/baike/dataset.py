@@ -3,44 +3,50 @@ import torch
 from torch.utils.data import Dataset
 import sentencepiece as spm
 
-class QADataset(Dataset):
-    def __init__(self, path, tokenizer_path, max_len=64):
-        self.sp = spm.SentencePieceProcessor()
-        self.sp.load(tokenizer_path)
-        self.max_len = max_len
-        self.file = path
-        self.offsets = []
 
-        with open(path, "r", encoding="utf-8") as f:
-            while True:
-                offset = f.tell()
-                line = f.readline()
-                if not line:
-                    break
-                self.offsets.append(offset)
+class QADataset(Dataset):
+    def __init__(self, txt_path, sp_model, max_len=128):
+        self.sp = spm.SentencePieceProcessor()
+        self.sp.load(sp_model)
+
+        self.max_len = max_len
+        self.bos_id = 1
+        self.eos_id = 2
+        self.pad_id = 0
+        self.sep_id = self.sp.piece_to_id("</s>")
+        with open(txt_path, "r", encoding="utf-8") as f:
+            self.lines = [l.strip() for l in f if l.strip()]
 
     def __len__(self):
-        return len(self.offsets)
+        return len(self.lines)
 
     def __getitem__(self, idx):
-        with open(self.file, "r", encoding="utf-8") as f:
-            f.seek(self.offsets[idx])
-            line = f.readline()
-            q, a = line.strip().split("\t", 1)
+        ids = self.sp.encode(self.lines[idx], out_type=int)
 
-        text = f"<s>{q}</s>{a}"
-        ids = self.sp.Encode(text, out_type=int)[:self.max_len]
-        return ids[:-1], ids[1:]
+        # ✅ 硬截断（含 BOS/EOS）
+        if len(ids) > self.max_len - 2:
+            ids = ids[:self.max_len - 2]
 
-# 补位用 collate_fn= 把一个 batch 里的变长样本，变成“等长张量”的函数
-def collate_fn(batch):
-    xs, ys = zip(*batch)
-    max_len = max(len(x) for x in xs)
+        if ids[0] != self.bos_id:
+            ids = [self.bos_id] + ids
+        if ids[-1] != self.eos_id:
+            ids.append(self.eos_id)
 
-    def pad(seq, val):
-        return [val] * (max_len - len(seq)) + seq
+        # ✅ 强制 padding 到 max_len
+        pad_len = self.max_len - len(ids)
+        ids += [self.pad_id] * pad_len
 
-    return (
-        torch.tensor([pad(x, 0) for x in xs]),
-        torch.tensor([pad(y, 0) for y in ys]),
-    )
+        input_ids = torch.tensor(ids, dtype=torch.long)
+        labels = input_ids.clone()
+
+        try:
+            sep_pos = ids.index(self.sep_id)
+        except ValueError:
+            sep_pos = len(ids) - 1
+
+        labels[:sep_pos + 1] = -100
+
+        return {
+            "input_ids": input_ids, # [<s>, 问, ：, 香, 港, …, 哪, 边, 行, 使, ？, </s>, 答, ：, 右, </s>]
+            "labels": labels, # [-100, -100, -100, …, -100, -100, 答, :, 右, </s>]
+        }

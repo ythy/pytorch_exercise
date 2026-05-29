@@ -1,68 +1,31 @@
-import json
-import re
+BOS = "<s>"
+SEP = "</s>"
 
-def clean(text):
-    return re.sub(r"\s+", "", text).strip()
 
-def txt_to_jsonl(txt_path, jsonl_path):
-    with open(txt_path, "r", encoding="utf-8") as fin, \
-         open(jsonl_path, "w", encoding="utf-8") as fout:
+def convert(qa_txt, out_txt):
+    with open(qa_txt, "r", encoding="utf-8-sig") as fin, \
+         open(out_txt, "w", encoding="utf-8") as fout:
 
-        lines = [l.strip() for l in fin.readlines()]
-        i = 0
-        while i < len(lines):
-            # 跳过空行
-            if not lines[i]:
-                i += 1
-                continue
+        lines = [l.strip() for l in fin if l.strip()]
 
-            q = clean(lines[i])
-            i += 1
-
-            # 找答案（跳过空行）
-            while i < len(lines) and not lines[i]:
-                i += 1
-
-            if i >= len(lines):
+        for i in range(0, len(lines), 2):
+            if i + 1 >= len(lines):
                 break
 
-            a = clean(lines[i])
-            i += 1
+            q = lines[i]
+            a = lines[i + 1]
 
-            if q and a:
-                fout.write(
-                    json.dumps({"q": q, "a": a}, ensure_ascii=False) + "\n"
-                )
+            if not q.endswith(("？", "?")):
+                q += "？"
 
-
-def qa_to_corpus(txt_path, out_path):
-    with open(txt_path, "r", encoding="utf-8") as fin, \
-         open(out_path, "w", encoding="utf-8") as fout:
-
-        lines = [l.rstrip("\n") for l in fin]
-        i = 0
-        while i < len(lines):
-            # 跳过空行
-            if not lines[i]:
-                i += 1
-                continue
-
-            q = clean(lines[i])
-            i += 1
-
-            # 找答案（跳过空行）
-            while i < len(lines) and not lines[i]:
-                i += 1
-            if i >= len(lines):
-                break
-
-            a = clean(lines[i])
-            i += 1
-
-            if q and a:
-                fout.write(f"{q}\t{a}\n")
-
+            fout.write(f"{BOS}问：{q}{SEP}答：{a}{SEP}\n")
 
 
 if __name__ == "__main__":
-    qa_to_corpus("data/chinese_baike_origin.txt", "data/chinese_baike_corpus.txt")
+    convert("corpus/chinese_baike_origin.txt", "data/chinese_baike_qa.txt")
+
+ 
+    
+
+
+    

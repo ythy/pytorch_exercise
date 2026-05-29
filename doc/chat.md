@@ -1,6 +1,56 @@
 ## 语料基础
 NLP = Natural Language Processing（自然语言处理）。
 语料： Corpus（单数） / Corpora（复数）
+## 输入 输出
+有 `words = ["我", "喜欢", "足球"]`
+处理为 `words = ["<BOS>", "我", "喜欢", "足球", "<EOS>"]`
+input `<BOS> 我 喜欢 足球`
+target `我 喜欢 足球 <EOS>`
+```py
+bos_id = word2idx["<BOS>"]
+eos_id = word2idx["<EOS>"]
+
+inp_ids = [bos_id] + [word2idx[w] for w in ["我", "喜欢", "足球"]]
+tgt_ids = [word2idx[w] for w in ["我", "喜欢", "足球"]] + [eos_id]
+```
+输入向右移一位，作为目标， 是 自回归语言模型（LM）​ 的标准监督信号
+
+## LSTM  Long Short‑Term Memory（长短期记忆）
+emb_dim = 词向量的维度（表示能力）​
+hidden_dim = 模型内部的“思考宽度”
+👉emb_dim 负责“懂词”​
+👉hidden_dim 负责“推理”
+
+## 预测时同概率选取
+argmax = Top‑K(k=1)
+```bash
+Top-K 预测：我
+Step 0:
+  我          -> 1.0000
+  音乐         -> 0.0000
+  篮球         -> 0.0000
+  足球         -> 0.0000
+  喜欢         -> 0.0000
+Step 1:
+  喜欢         -> 0.6000
+  不喜欢        -> 0.4000
+  噪音         -> 0.0000
+  音乐         -> 0.0000
+  篮球         -> 0.0000
+Step 2:
+  音乐         -> 0.3333
+  足球         -> 0.3333
+  篮球         -> 0.3333
+  噪音         -> 0.0000
+  喜欢         -> 0.0000
+Step 3:
+  <EOS>      -> 1.0000
+  篮球         -> 0.0000
+  音乐         -> 0.0000
+  足球         -> 0.0000
+  我          -> 0.0000
+<BOS> 我 喜欢 音乐
+```
 
 ### 大模型（如 GPT / LLaMA / PaLM）本质
 `P(next_token | context)`: 给定一个上下文（已出现的文字），模型在预测“下一个词最可能是什么”。

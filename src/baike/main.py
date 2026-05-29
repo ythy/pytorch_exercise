@@ -1,178 +1,90 @@
 import torch
-import torch.optim as optim
 from config import *
 from model import SmallLM
-from dataset import QADataset, collate_fn
+from dataset import QADataset
 import argparse
 from train_tokenizer import spm_train
 import sentencepiece as spm
-import os
+from tqdm import tqdm
 torch._dynamo.disable()
+from transformers import GenerationConfig
 
-def train(resume=True):
-    ds = QADataset(TRAIN_FILE, TOKENIZER_PATH, MAX_LEN)
-    dl = torch.utils.data.DataLoader(
-        ds,
+BOS_ID = 1
+EOS_ID = 2
+
+generation_config = GenerationConfig(
+    max_new_tokens=32,
+    min_new_tokens=1,
+
+    num_beams=4,
+    early_stopping=True,
+
+    do_sample=False,
+
+    eos_token_id=EOS_ID,
+    pad_token_id=EOS_ID,
+    bos_token_id=BOS_ID,
+)
+
+def train():
+    dataset = QADataset(TRAIN_FILE, TOKENIZER_PATH, MAX_LEN)
+    loader = torch.utils.data.DataLoader(
+        dataset,
         batch_size=BATCH_SIZE,
         shuffle=True,
-        collate_fn=collate_fn,
-        num_workers=0
+        drop_last=True,
     )
 
-    model = SmallLM(VOCAB_SIZE)
-
-    # ========== ✅ 断点续训 ==========
-    start_epoch = 0
-    if resume and os.path.exists(MODEL_SAVE_PATH):
-        print("✅ 加载已有模型，继续训练")
-        model.load_state_dict(torch.load(MODEL_SAVE_PATH))
-    else:
-        print("🆕 从头开始训练")
-
+    model = SmallLM(VOCAB_SIZE).to(DEVICE)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
     model.train()
+    low_loss_steps = 0
 
-    optimizer = optim.AdamW(
-        model.parameters(),
-        lr=LR,
-        betas=(0.9, 0.95),
-        eps=1e-8
-    )
-
-    for epoch in range(start_epoch, EPOCHS):
+    for epoch in range(EPOCHS):
         total_loss = 0.0
+        total_tokens = 0
 
-        for step, (x, y) in enumerate(dl):
-            optimizer.zero_grad()
-            loss = model(x, labels=y)["loss"]
+        for step, batch in enumerate(tqdm(loader, desc=f"Epoch {epoch}")):
+            input_ids = batch["input_ids"].to(DEVICE)
+            labels = batch["labels"].to(DEVICE)
+
+            outputs = model(input_ids=input_ids, labels=labels)
+            loss = outputs.loss
+
             loss.backward()
-
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
+            optimizer.zero_grad()
 
             total_loss += loss.item()
+            total_tokens += (labels != -100).sum().item()
 
-            if step % 100 == 0:
-                print(f"Epoch {epoch} | Step {step} | Loss {loss.item():.4f}")
-
-        avg = total_loss / len(dl)
-        print(f"Epoch {epoch} | Avg Loss: {avg:.4f}")
-
-        # ========== ✅ 保存（覆盖式，但安全） ==========
-        torch.save(model.state_dict(), MODEL_SAVE_PATH)
-
-        # ✅ 强烈建议：顺手留一个副本
-        torch.save(model.state_dict(), f"model_epoch{epoch}.pth")
-
-    print("✅ 训练完成")
- 
-
-def ask2(
-    question,
-    max_new_tokens=8, #  最多只生成 ? 个 token
-    temperature=0.5,
-    top_k=50,       # ✅ 必须给一个合理值
-    top_p=0.9       # ✅ 收紧
-):
-    sp = spm.SentencePieceProcessor()
-    sp.load(TOKENIZER_PATH)
-
-    model = SmallLM(VOCAB_SIZE)
-    model.load_state_dict(torch.load(MODEL_SAVE_PATH, map_location="cpu"))
-    model.eval()
-
-    BOS_ID = 1
-    EOS_ID = 2
-
-    prompt = f"<s>{question}</s>"
-    prompt_ids = sp.Encode(prompt, out_type=int)
-
-    ids = prompt_ids[:]
-
-    with torch.no_grad():
-        for _ in range(max_new_tokens):
-            logits = model(torch.tensor([ids]))["logits"]
-            next_logit = logits[0, -1]
-
-            # ✅ 禁止再生 <s>
-            next_logit[BOS_ID] = float("-inf") 
-
-            # ✅ temperature
-            next_logit = next_logit / max(temperature, 1e-5)
-
-            # ✅ top-k
-            if top_k > 0:
-                k = min(top_k, next_logit.size(-1))
-                values, _ = torch.topk(next_logit, k)
-                next_logit[next_logit < values[-1]] = float("-inf")
-
-            # ✅ top-p
-            if top_p < 1.0:
-                sorted_logits, sorted_indices = torch.sort(next_logit, descending=True)
-                cumulative_probs = torch.cumsum(
-                    torch.softmax(sorted_logits, dim=-1), dim=-1
+            if step % 10 == 0:
+                print(
+                    f"[Epoch {epoch}] "
+                    f"Step {step} | "
+                    f"Loss: {loss.item():.4f} | "
+                    f"Tokens: {total_tokens} | "
+                    f"Loss steps: {low_loss_steps}"
                 )
-                sorted_logits[cumulative_probs > top_p] = float("-inf")
-                next_logit.scatter_(0, sorted_indices, sorted_logits)
+                if loss.item() < MIN_LOSS:
+                    low_loss_steps += 1
+                    if low_loss_steps >= PATIENCE_STEPS:
+                        print(
+                            f"\n🛑 Stopped early: "
+                            f"loss < {MIN_LOSS} for {PATIENCE_STEPS} steps."
+                        )
+                        torch.save(model.state_dict(), MODEL_SAVE_PATH)
+                        print("✅ Model saved.")
+                        return
+                else:
+                   low_loss_steps = 0 
+               
+        avg_loss = total_loss / len(loader)
+        print(f"\n✅ Epoch {epoch} finished | Avg Loss: {avg_loss:.4f}\n")
 
-            # ✅✅✅ 防炸兜底（核心）
-            if torch.all(next_logit == float("-inf")):
-                next_logit = torch.zeros_like(next_logit)
+    torch.save(model.state_dict(), MODEL_SAVE_PATH)
+    print("✅ Model saved.")
 
-            probs = torch.softmax(next_logit, dim=-1)
-            next_token = torch.multinomial(probs, 1).item()
-
-            if next_token == EOS_ID:
-                break
-
-            ids.append(next_token)
-
-    gen_ids = ids[len(prompt_ids):]
-    return sp.Decode(gen_ids)
-
-def ask(
-    question,
-    max_new_tokens=6,   # QA 一般很短
-):
-    sp = spm.SentencePieceProcessor()
-    sp.load(TOKENIZER_PATH)
-
-    model = SmallLM(VOCAB_SIZE)
-    model.load_state_dict(torch.load(MODEL_SAVE_PATH, map_location="cpu"))
-    model.eval()
-
-    BOS_ID = 1
-    EOS_ID = 2
-
-    prompt = f"<s>{question}</s>"
-    prompt_ids = sp.Encode(prompt, out_type=int)
-    ids = prompt_ids[:]
-
-    with torch.no_grad():
-        for _ in range(max_new_tokens):
-            logits = model(torch.tensor([ids]))["logits"]
-            next_logit = logits[0, -1]
-
-            # ✅ 禁止 <s>
-            next_logit[BOS_ID] = float("-inf")
-
-            # ✅ 禁止重复上一个 token
-            if len(ids) > 0:
-                next_logit[ids[-1]] = float("-inf")
-
-            # ✅ 防炸
-            if torch.all(next_logit == float("-inf")):
-                break
-
-            # ✅✅✅ 关键：用 greedy，不用 sampling
-            next_token = torch.argmax(next_logit).item()
-
-            if next_token == EOS_ID:
-                break
-
-            ids.append(next_token)
-
-    gen_ids = ids[len(prompt_ids):]
-    return sp.Decode(gen_ids)
 
 def check_loss():
     # ========== 1. 加载模型 ==========
@@ -202,21 +114,54 @@ def check_loss():
     print(f"\n✅ 当前模型在训练集上的平均 Loss: {total_loss / steps:.4f}\n")
  
 
+def load_model():
+    sp = spm.SentencePieceProcessor()
+    sp.load(TOKENIZER_PATH)
+
+    model = SmallLM(VOCAB_SIZE)
+    model.load_state_dict(torch.load(MODEL_SAVE_PATH, map_location=DEVICE))
+    model.to(DEVICE)
+    model.eval()
+
+    return model, sp
+
+
+def generate_answer(model, sp, question):
+    prompt = f"<s>问：{question}</s>答："
+    assert prompt.endswith("答："), "prompt corrupted"
+
+    input_ids = sp.encode(prompt, out_type=int)
+    assert input_ids[-1] != EOS_ID, "EOS leaked into prompt!"
+
+    input_ids = torch.tensor([input_ids], device=DEVICE)
+
+    # prompt = f"<s>问：{question}</s>答："
+    # input_ids = torch.tensor(
+    #     [sp.encode(prompt, out_type=int)],
+    #     device=DEVICE
+    # )
+
+    output_ids = model.generate(
+        input_ids,
+        generation_config=generation_config
+    )
+
+    # 只取生成部分
+    gen_ids = output_ids[0][input_ids.size(1):]
+    answer = sp.decode(gen_ids.tolist())
+
+    return answer.strip()
+
 
 val_qa = [
-    ("“0531”是我国山东省哪个城市的电话区号？", "济南"),
-    ("“0571”是我国浙江省哪个城市的电话区号？", "杭州"),
-    ("“1、2、3、4、5、6、7”七个唱名的发明者来自？", "法国"),
-    ("“20世纪最伟大运动员”之一贝利是什么运动员？", "足球"),
-    ("“433”“352”“442”阵型是哪种运动的术语？", "足球"),
-    ("“586电脑”和“奔腾电脑”是一回事吗？", "不是"),
-    ("“606”是杀菌剂，请问“606”代表什么？", "试验编号"),
-    ("“7UP”是我们常喝的哪种碳酸饮料？", "七喜"),
-    ("“863”计划名称的由来是？", "1986年3月制定"),
-    ("+、-、*、/、=”符号是由一个人发明的吗？", "不是"),
-    ("“√”是英文“right”（正确）一词的第一个字母“r”的简化？", "对"),
+    ("0531 是我国哪个城市的电话区号？", "济南"),
+    ("世界上最大的蝴蝶是哪一种？", "南美凤蝶"),
+    ("香港特别行政区规定汽车在道路的哪边行驶？", "右"),
+    ("“AK47”是NBA哪位俄罗斯籍球星外号？", "安德烈·基里连科"),
+    ("“BRA”是哪个美洲国家的英文缩写？", "巴西"),
+    ("“avi”是什么类型文件的格式？", "视频"),
+    ("诗句“每逢佳节倍思亲”中的“佳节”指的是哪一个节日？", "重阳节"),
 ]
-
 
 if __name__ == "__main__":
     # 在这里指定要运行的方法
@@ -225,7 +170,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     if args.mode == "tokenizer":
-        spm_train("data/chinese_baike_corpus.txt", "data/tokenizer/chinese_baike", 4400)
+        spm_train("data/chinese_baike_qa.txt", "data/tokenizer/chinese_baike", 4400)
 
     elif args.mode == "train":
         train()
@@ -234,7 +179,12 @@ if __name__ == "__main__":
         check_loss()
 
     elif args.mode == "predict":
-        for q in val_qa:
-            print("Q:", q)
-            print("A:", ask(q))
-            print("-" * 40)
+        model, sp = load_model()
+
+        for q, gt in val_qa:
+            pred = generate_answer(model, sp, q)
+            status = "✅" if pred.strip() == gt.strip() else "❌"
+
+            print(f"{status} Q: {q}")
+            print(f"   GT : {gt}")
+            print(f"   Pred: {pred}\n")

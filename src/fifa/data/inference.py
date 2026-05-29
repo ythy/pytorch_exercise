@@ -6,7 +6,7 @@ from config import FEATURES_CAT
 def get_data_custom(ckpt):
     cat_vocab_idx = ckpt["config"]["vocab_idx"]
     
-     origin_data = [
+    origin_data = [
         [
             78., 85., 21., 170.18, 72.12,
             cat_vocab_idx["Nationality"]["Argentina"],
